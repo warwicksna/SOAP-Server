@@ -1,4 +1,6 @@
-import sys
+#! /usr/bin/env python
+
+import sys, base64
 from suds.client import Client
 from rpclib.model.binary import ByteArray
 
@@ -23,7 +25,7 @@ if(len(sys.argv) > 1):
     elif(sys.argv[1][0] == 'u'): #upload
         
         f = open(sys.argv[3])#read in the file
-        fileContents = ByteArray.from_string(f.read()) #bytearray(f.read()
+        fileContents = base64.b64encode(f.read()) #bytearray(f.read()
         
         if(sys.argv[1][1] == 'a'): #algorithm
             args = ' '.join(sys.argv[4:])
