@@ -35,13 +35,13 @@ import re
 import base64
 
 from time import time
+from threading import Thread
 from rpclib.decorator import srpc
 from rpclib.service import ServiceBase
 from rpclib.model.complex import Iterable
 from rpclib.model.primitive import Integer
 from rpclib.model.primitive import String
 from rpclib.model.binary import ByteArray
-
 from rpclib.util.simple import wsgi_soap_application
 
 try:
@@ -52,6 +52,9 @@ except ImportError:
 
 base_dfs_dir = "/user/hduser/"
 hadoop_dir = "/usr/local/hadoop/"
+pool = {}
+pool_id = 0
+results = {}
 
 def list_algorithms():
     myfile = open(hadoop_dir+"algorithms/algorithms.txt","r")
@@ -62,6 +65,25 @@ def list_datasets():
     str = subprocess.check_output([hadoop_dir+"bin/hadoop","dfs","-ls",base_dfs_dir+"snat_datasets/"])
     datasets = [re.search(base_dfs_dir+'snat_datasets/([A-z0-9_-]+)',line).group(1) for line in str.split("\n")[1:-1]]
     return datasets
+
+def run_script(script_name, t_id):
+    cmd = ["python",hadoop_dir+"algorithms/"+script_name]
+    ret = subprocess.check_output(cmd)
+    output = re.search("OUTPUT:([A-z0-9_-]+)",ret).group(1)
+    results[t_id] = base_dfs_dir+"snat_output/"+output
+
+def run_jar(data_set_name, algorithm_name, jarfile, classname, t_id):
+    input = base_dfs_dir+"snat_datasets/"+data_set_name
+    output = base_dfs_dir+"snat_output/"+algorithm_name+"-"+data_set_name+"-"+str(int(time()))
+    cmd = [hadoop_dir+"bin/hadoop","jar",hadoop_dir+"algorithms/"+jarfile,classname,input,output]
+    subprocess.call(cmd)
+    results[t_id] = output
+
+def add_to_pool(t):
+    global pool
+    global pool_id
+    pool[pool_id] = t
+    pool_id = pool_id + 1
 
 class SnatService(ServiceBase):
 
@@ -79,7 +101,6 @@ class SnatService(ServiceBase):
         subprocess.call(cmd)        
         myfile = open(tmp_file_name,"w")
         myfile.write(base64.b64decode(data_set))
-        # bin/hadoop dfs -copyFromLocal /tmp/snat_upload.Readme2.txt /user/hduser/snat_datasets/RM
         myfile.close()
         
         cmd = [hadoop_dir+"bin/hadoop",
@@ -87,8 +108,9 @@ class SnatService(ServiceBase):
                "-copyFromLocal",
                tmp_file_name,
                base_dfs_dir+"snat_datasets/"+data_set_name]
+        subprocess.call(cmd)
 
-        return 0
+        return "success"
 
     @srpc(String, String, String, _returns=String)
     def upload_algorithm(algorithm_name, class_name, jar_file):
@@ -119,27 +141,41 @@ class SnatService(ServiceBase):
     def get_data_sets():
         return list_datasets()
 
-    @srpc(String, String, Integer, String, _returns=ByteArray)
+    @srpc(String, String, Integer, String, _returns=Integer)
     def execute_algorithm(algorithm_name, data_set_name, num_nodes, command_line_args):
-        algo = [algo for algo in list_algorithms() if algo[0] == algorithm_name]
+
+        algo = [algo for algo in list_algorithms() if algo[0] == algorithm_name][0]
         dataset = [ds for ds in list_datasets() if ds == data_set_name]
 
         if len(algo) == 0:
-            logging.error("No Algorithm with name: "+algorithm_name)
+            error = "No Algorithm with name: "+algorithm_name
         elif len(dataset) == 0:
-            logging.error("No data set with name: "+data_set_name)
+            error = "No data set with name: "+data_set_name
         else:
-            input = base_dfs_dir+"snat_datasets/"+dataset[0]
-            output = base_dfs_dir+"snat_output/"+algorithm_name+"-"+data_set_name+"-"+str(int(time()))
-            cmd = [hadoop_dir+"bin/hadoop","jar","algorithms/"+algo[0][1],algo[0][2],input,output]
-            logging.info(cmd)
-            ret = subprocess.call(cmd)
-            cmd = [hadoop_dir+"bin/hadoop","dfs","-cat",output+"/part-r-00000"]
-            ret2 = subprocess.check_output(cmd)
-            return ByteArray.from_string(ret2)
-       
-        return ByteArray.from_string("fail!")
+            t_id = pool_id
+            if algo[1] == "jar":
+                t = Thread(target=run_jar, args=(data_set_name, algorithm_name, algo[2], algo[3], t_id))
+            elif algo[1] == "py":
+                t = Thread(target=run_script, args=(algo[2],t_id))
+
+            t.start()
+            add_to_pool(t)
+            return t_id
+
+        logging.error(error)
+        return 0
                    
+    @srpc(Integer, _returns=String)
+    def get_results(t_id):
+        if pool[t_id].isAlive():
+            return("0")
+        else:
+            page = results[t_id]
+            cmd = [hadoop_dir+"bin/hadoop","dfs","-cat",page+"/part-r-00000"]
+            ret = subprocess.check_output(cmd)
+            return base64.b64encode(ret)
+
+
     @srpc(String, _returns=String)
     def show_status(required_data):
         # TODO: pass proper data to required_data 
@@ -150,9 +186,6 @@ class SnatService(ServiceBase):
 if __name__=='__main__':
     logging.basicConfig(level=logging.DEBUG)
     logging.getLogger('rpclib.protocol.xml').setLevel(logging.DEBUG)
-
-    logging.info("listening to http://127.0.0.1:7792")
-    logging.info("wsdl is at: http://localhost:7792/?wsdl")
 
     wsgi_app = wsgi_soap_application([SnatService], 'warwick.snat.soap')
     server = make_server('127.0.0.1', 7792, wsgi_app)

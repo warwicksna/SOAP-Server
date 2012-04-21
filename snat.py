@@ -4,14 +4,15 @@ import sys, base64
 from suds.client import Client
 from rpclib.model.binary import ByteArray
 
-soapclient = Client('http://localhost:7792/?wsdl')
+soapclient = Client('http://localhost:7791/?wsdl')
 serv = soapclient.service
 
 if(len(sys.argv) > 1):
     
     if(sys.argv[1] == 'e'): #execute
  
-        print serv.execute_algorithm(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:])#algorithm_id, data_set_id, num_nodes, command_line_args
+        result = serv.execute_algorithm(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:]) #algorithm_id, data_set_id, num_nodes, command_line_args
+        print base64.b64decode(result)
         
     elif(sys.argv[1][0] == 'l'): #list
 
@@ -28,15 +29,15 @@ if(len(sys.argv) > 1):
         fileContents = base64.b64encode(f.read()) #bytearray(f.read()
         
         if(sys.argv[1][1] == 'a'): #algorithm
-            args = ' '.join(sys.argv[4:])
-            print serv.upload_algorithm(sys.argv[2], fileContents, args)
+            # args = ' '.join(sys.argv[4:])
+            print serv.upload_algorithm(sys.argv[2], sys.argv[4], fileContents)
         
         if(sys.argv[1][1] == 'd'): #dataset
             print serv.upload_data_set(sys.argv[2], fileContents)
     
     
     elif(sys.argv[1] == 's'): #status
-        print serv.show_status("foo")
+        print serv.show_status("50070/dfshealth.jsp")
         
         
 else:
@@ -48,5 +49,3 @@ else:
         ua   <name> <filename> <job class>                      Upload algorithm
         ud   <name> <filename>                                  Upload dataset
 """
-                                   
-    
